@@ -24,7 +24,6 @@ class ScwServer(object):
 
 
 class ScwAnsible(object):
-
     DESTINATION_VARIABLE_PUBLIC_IP = 'public_ip'
     DESTINATION_VARIABLE_PRIVATE_IP = 'private_ip'
 
@@ -34,36 +33,25 @@ class ScwAnsible(object):
         region = self.get_region()
         self.destination_variable = self.get_destination_variable()
 
-        hostgroups = {'_meta': {'hostvars': {}}}
+        self.hostgroups = {'_meta': {'hostvars': {}}}
 
         if args.host is not None:
             print json.dumps({})
         else:
             scw = ScwServer("https://cp-{}.scaleway.com".format(region))
-            hostgroups = {'_meta': {'hostvars': {}}}
             for server in scw.get_servers():
                 name = server.get('name')
                 if server.get('state') != 'running':
                     continue
                 var = {}
-                environments = []
-                for tag in server.get('tags'):
-                    if tag.find(':') == -1:
-                        continue
-                    (key, value) = tag.split(':', 1)
-                    if key == 'environment':
-                        environments.append(value)
-                    else:
-                        var[key] = value
-                for env in environments:
-                    if env not in hostgroups:
-                        hostgroups[env] = {'hosts': []}
-                    hostgroups[env]['hosts'].append(name)
 
                 ansible_ssh_host = self.get_ansible_ssh_host(server)
 
                 if ansible_ssh_host is None:
                     continue
+
+                self.add_to_groups(server, ansible_ssh_host)
+                self.add_key_value_pairs(server, var)
 
                 var['ansible_ssh_host'] = ansible_ssh_host
                 if ('public_ip' not in server) or (server.get('public_ip') is None):
@@ -71,17 +59,51 @@ class ScwAnsible(object):
                 else:
                     var['ansible_ssh_host'] = server.get('public_ip').get('address')
                 var['scw'] = server
-                hostgroups['_meta']['hostvars'][name] = var
+                self.hostgroups['_meta']['hostvars'][name] = var
 
         if args.list:
-            print json.dumps(hostgroups, indent=2)
+            print json.dumps(self.hostgroups, indent=2)
 
         if args.cssh:
-            for group, values in hostgroups.iteritems():
+            for group, values in self.hostgroups.iteritems():
                 if group == '_meta':
                     continue
                 list_hosts = ["root@{0}".format(host) for host in values['hosts']]
                 print "{0} = {1}".format(group, " ".join(list_hosts))
+
+    @staticmethod
+    def add_key_value_pairs(server, var):
+        for tag in server.get('tags'):
+
+            if tag.find(':') == -1:
+                continue
+
+            # tags formed as <key>:<value> are added as ansible variables
+            (key, value) = tag.split(':', 1)
+            var[key] = value
+
+    def add_to_groups(self, server, ansible_ssh_host):
+        for tag in server.get('tags'):
+
+            if tag.find(':') == -1:
+                # each tag without ':' forms a group on its own
+                self.add_to_group('tag_' + tag, ansible_ssh_host)
+            else:
+                # tags formed as environment:<something> or ansible:<something> are added to group <something>
+                (key, value) = tag.split(':', 1)
+                if key == 'environment' or key == 'ansible':
+                    self.add_to_group(value, ansible_ssh_host)
+
+        self.add_to_group('commercial_type_' + server['commercial_type'], ansible_ssh_host)
+        self.add_to_group('arch_' + server['arch'], ansible_ssh_host)
+        self.add_to_group('hostname_' + server['hostname'], ansible_ssh_host)
+        self.add_to_group('name_' + server['name'], ansible_ssh_host)
+        self.add_to_group('security_group_' + server['security_group']['name'], ansible_ssh_host)
+
+    def add_to_group(self, group, ansible_ssh_host):
+        if group not in self.hostgroups:
+            self.hostgroups[group] = {'hosts': []}
+        self.hostgroups[group]['hosts'].append(ansible_ssh_host)
 
     def get_ansible_ssh_host(self, server):
         if self.destination_variable == self.DESTINATION_VARIABLE_PRIVATE_IP:
@@ -121,4 +143,5 @@ def main():
     ScwAnsible()
 
 
-ScwAnsible()
+if __name__ == '__main__':
+    main()
