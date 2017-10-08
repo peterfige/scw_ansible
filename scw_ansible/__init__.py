@@ -1,6 +1,8 @@
 import os
 import json
 import argparse
+import re
+
 from scaleway.apis import ComputeAPI
 
 
@@ -32,6 +34,8 @@ class ScwAnsible(object):
 
         region = self.get_region()
         self.destination_variable = self.get_destination_variable()
+        self.filters = self.get_filters()
+        self.excludes = self.get_excludes()
 
         self.hostgroups = {'_meta': {'hostvars': {}}}
 
@@ -43,22 +47,25 @@ class ScwAnsible(object):
                 name = server.get('name')
                 if server.get('state') != 'running':
                     continue
-                var = {}
 
                 ansible_ssh_host = self.get_ansible_ssh_host(server)
 
                 if ansible_ssh_host is None:
                     continue
 
-                self.add_to_groups(server, ansible_ssh_host)
+                var = {
+                    'scw': server,
+                    'ansible_ssh_host': ansible_ssh_host
+                }
+
                 self.add_key_value_pairs(server, var)
 
-                var['ansible_ssh_host'] = ansible_ssh_host
-                if ('public_ip' not in server) or (server.get('public_ip') is None):
-                    var['ansible_ssh_host'] = server.get('private_ip')
-                else:
-                    var['ansible_ssh_host'] = server.get('public_ip').get('address')
-                var['scw'] = server
+                if not self.all_filters_pass(var):
+                    continue
+                if self.any_excludes_pass(var):
+                    continue
+
+                self.add_to_groups(server, ansible_ssh_host)
                 self.hostgroups['_meta']['hostvars'][name] = var
 
         if args.list:
@@ -81,6 +88,41 @@ class ScwAnsible(object):
             # tags formed as <key>:<value> are added as ansible variables
             (key, value) = tag.split(':', 1)
             var[key] = value
+
+    def all_filters_pass(self, var):
+        for clause in self.filters:
+            if not self.evaluate_clause(clause, var):
+                return False
+        return True
+
+    def any_excludes_pass(self, var):
+        for clause in self.excludes:
+            if self.evaluate_clause(clause, var):
+                return True
+        return False
+
+    def evaluate_clause(self, clause, var):
+        value = self.retrieve_value_by_path(clause.get('key'), var)
+        if value is None:
+            return False
+        if isinstance(value, basestring):
+            return re.search(clause.get('regexp'), value) is not None
+        if isinstance(value, (int, bool)):
+            return re.search(clause.get('regexp'), json.dumps(value)) is not None
+
+        raise ValueError('Expected string, int or boolean at path', clause.get('key'), ',but got', json.dumps(value))
+
+    def retrieve_value_by_path(self, path, var):
+        key = path.strip()
+        rest = ''
+        if path.find('.') != -1:
+            (key, rest) = path.split('.', 1)
+
+        # path is empty, we return the whole value
+        if not key:
+            return var
+
+        return self.retrieve_value_by_path(rest, var.get(key))
 
     def add_to_groups(self, server, ansible_ssh_host):
         for tag in server.get('tags'):
@@ -137,6 +179,35 @@ class ScwAnsible(object):
             return os.environ['SCW_DESTINATION_VARIABLE']
         else:
             return self.DESTINATION_VARIABLE_PUBLIC_IP
+
+    def get_filters(self):
+        if 'SCW_FILTER' in os.environ:
+            return self.parse_filter_expression(os.environ['SCW_FILTER'])
+        else:
+            return []
+
+    def get_excludes(self):
+        if 'SCW_EXCLUDE' in os.environ:
+            return self.parse_filter_expression(os.environ['SCW_EXCLUDE'])
+        else:
+            return []
+
+    @staticmethod
+    def parse_filter_expression(text):
+        result = []
+
+        clauses = text.split(';')
+        for clause in clauses:
+            if clause.find('=') == -1:
+                raise ValueError('Expected <key> = <regexp>, found ' + clause)
+            (key, regexp) = clause.split('=', 1)
+            clause = {
+                'key': key,
+                'regexp': regexp
+            }
+            result.append(clause)
+
+        return result
 
 
 def main():
