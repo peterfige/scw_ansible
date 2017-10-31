@@ -1,4 +1,5 @@
 import os
+import os
 import json
 import argparse
 import re
@@ -66,7 +67,7 @@ class ScwAnsible(object):
                     continue
 
                 self.add_to_groups(server, ansible_ssh_host)
-                self.hostgroups['_meta']['hostvars'][name] = var
+                self.hostgroups['_meta']['hostvars'][ansible_ssh_host] = var
 
         if args.list:
             print json.dumps(self.hostgroups, indent=2)
