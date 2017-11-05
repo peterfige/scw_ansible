@@ -41,7 +41,7 @@ class ScwAnsible(object):
         self.hostgroups = {'_meta': {'hostvars': {}}}
 
         if args.host is not None:
-            print json.dumps({})
+            print(json.dumps({}))
         else:
             scw = ScwServer("https://cp-{}.scaleway.com".format(region))
             for server in scw.get_servers():
@@ -70,14 +70,14 @@ class ScwAnsible(object):
                 self.hostgroups['_meta']['hostvars'][ansible_ssh_host] = var
 
         if args.list:
-            print json.dumps(self.hostgroups, indent=2)
+            print(json.dumps(self.hostgroups, indent=2))
 
         if args.cssh:
             for group, values in self.hostgroups.iteritems():
                 if group == '_meta':
                     continue
                 list_hosts = ["root@{0}".format(host) for host in values['hosts']]
-                print "{0} = {1}".format(group, " ".join(list_hosts))
+                print("{0} = {1}".format(group, " ".join(list_hosts)))
 
     @staticmethod
     def add_key_value_pairs(server, var):
@@ -106,7 +106,7 @@ class ScwAnsible(object):
         value = self.retrieve_value_by_path(clause.get('key'), var)
         if value is None:
             return False
-        if isinstance(value, basestring):
+        if isinstance(value, str):
             return re.search(clause.get('regexp'), value) is not None
         if isinstance(value, (int, bool)):
             return re.search(clause.get('regexp'), json.dumps(value)) is not None
